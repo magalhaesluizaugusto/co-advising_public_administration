@@ -1,0 +1,232 @@
+
+# Load necessary packages
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(psych)
+library(skimr)
+library(summarytools)
+library(car)
+library(nnet)
+library(janitor)
+library(stringi)
+
+rm(list = ls())
+cat("\014")
+
+dir <- dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(dir)
+
+# Load data
+data <- na.omit(read_excel("general_database_alyne.xlsx", sheet = "database")) %>% 
+  clean_names()
+
+# First, remove accents
+colnames(data) <- stri_trans_general(colnames(data), "Latin-ASCII")
+
+# Then, apply janitor to clean names to snake_case
+data <- data %>% clean_names()
+
+
+# View structure
+str(data)
+
+# Convert variables to appropriate types
+data <- data %>%
+  mutate(
+    data = as.Date(data),
+    situacao_proposta_caixa = as.factor(situacao_proposta_caixa),
+    situacao_proposta_sadipen = as.factor(situacao_proposta_sadipen),
+    estado = as.factor(trimws(estado)),
+    regiao = as.factor(regiao),
+    expec_poli_presi = as.factor(expec_poli_presi),
+    ano_eleitoral_presi = as.factor(trimws(`ano_eleitoral_presi`)),
+    ano_eleitoral_mun = as.factor(ano_eleitoral_mun),
+    expec_poli_pref = as.factor(expec_poli_pref),
+    populacao = as.numeric(populacao),
+    valor_proposta = as.numeric(valor_proposta),
+    igm_cfa = as.numeric(igm_cfa),
+    ifgf_firjan = as.numeric(ifgf_firjan),
+    ifdm_firjan = as.numeric(ifdm_firjan),
+    pib = as.numeric(pib)
+  )
+
+# Create dummy dependent variable
+data <- data %>%
+  mutate(dummy_situacao = ifelse(situacao_proposta_caixa == "CONTRATADA", 1, 0),
+         # expec_poli_presi = ifelse(expec_poli_presi == "CONTRATADA", 1, 0),
+         expec_poli_pref_direita = ifelse(expec_poli_pref == "Direita", 1, 0),
+         expec_poli_pref_esquerda = ifelse(expec_poli_pref == "Esquerda", 1, 0),
+         expec_poli_pref_centro = ifelse(expec_poli_pref == "Centro", 1, 0),
+         expec_poli_pref_centro_esquerda = ifelse(expec_poli_pref == "Centro-esquerda", 1, 0),
+         expec_poli_pref_centro_direita = ifelse(expec_poli_pref == "Centro-direita", 1, 0),
+         ano_eleitoral_mun = ifelse(ano_eleitoral_mun == "sim", 1, 0),
+         ano_eleitoral_presi = ifelse(ano_eleitoral_presi == "sim", 1, 0),
+         pib_per_capita = pib/populacao) 
+
+# -----------------------------
+# DESCRIPTIVE STATISTICS
+# -----------------------------
+
+# Summary of numeric variables
+numeric_vars <- data %>%
+  select(where(is.numeric))
+
+summary(numeric_vars)
+describe(numeric_vars)
+
+# Skim summary
+skim(data)
+
+# Frequency tables for categorical variables
+categorical_vars <- data %>%
+  select(where(is.factor))
+
+lapply(categorical_vars, table)
+
+# Histograms for numeric variables
+for (var in names(numeric_vars)) {
+  print(
+    ggplot(data, aes_string(x = var)) +
+      geom_histogram(bins = 30, fill = "steelblue", color = "black") +
+      theme_minimal() +
+      labs(title = paste("Histogram of", var))
+  )
+}
+
+# # Bar plots for categorical variables
+# for (var in names(categorical_vars)) {
+#   print(
+#     ggplot(data, aes_string(x = var)) +
+#       geom_bar(fill = "coral") +
+#       theme_minimal() +
+#       labs(title = paste("Bar plot of", var)) +
+#       theme(axis.text.x = element_text(angle = 45, hjust = 1))
+#   )
+# }
+# 
+# 
+# plot_dummy_vars <- function(df) {
+#   # Identify numeric dummy variables: only 0 and 1 (and possibly NA)
+#   dummy_vars <- df %>%
+#     select(where(is.numeric)) %>%
+#     select(where(~ all(na.omit(.) %in% c(0, 1)))) %>%
+#     names()
+#   
+#   # Inform user
+#   message("Identified dummy variables: ", paste(dummy_vars, collapse = ", "))
+#   
+#   # Plot each dummy as a bar plot
+#   for (var in dummy_vars) {
+#     p <- ggplot(df, aes(x = factor(.data[[var]]))) +
+#       geom_bar(fill = "steelblue") +
+#       labs(
+#         title = paste("Bar Plot of Dummy Variable:", var),
+#         x = var,
+#         y = "Count"
+#       ) +
+#       scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+#       theme_minimal()
+#     
+#     print(p)
+#   }
+# }
+# 
+# plot_dummy_vars(data)
+
+
+# # Boxplots for numeric vs outcome
+# for (var in names(numeric_vars)) {
+#   print(
+#     ggplot(data, aes(x = as.factor(dummy_situacao), y = .data[[var]])) +
+#       geom_boxplot(fill = "lightgreen") +
+#       labs(title = paste("Boxplot of", var, "by dummy_situacao"),
+#            x = "dummy_situacao (0 = Not Contracted, 1 = Contracted)") +
+#       theme_minimal()
+#   )
+# }
+
+
+
+# Correlation matrix
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+print(cor_matrix)
+
+# -----------------------------
+# LOGIT AND PROBIT MODELS
+# -----------------------------
+
+# Prepare model data
+model_data <- data %>%
+  select(dummy_situacao, 
+         valor_proposta, 
+         populacao, 
+         igm_cfa, 
+         ifgf_firjan,
+         ifdm_firjan, 
+         pib, 
+         expec_poli_presi, 
+         ano_eleitoral_presi,
+         ano_eleitoral_mun, 
+         expec_poli_pref, 
+         pib_per_capita,
+         expec_poli_pref_direita,
+         expec_poli_pref_centro_direita,
+         expec_poli_pref_centro,
+         expec_poli_pref_centro_esquerda,
+         expec_poli_pref_esquerda) %>%
+  na.omit()
+
+# Logit model
+logit_model <- glm(dummy_situacao ~ valor_proposta + 
+                     # populacao + 
+                     igm_cfa + 
+                     ifgf_firjan +
+                     ifdm_firjan +
+                     # pib + 
+                     # expec_poli_presi +
+                     pib_per_capita + 
+                     ano_eleitoral_presi +
+                     ano_eleitoral_mun + 
+                     expec_poli_pref_direita +
+                     expec_poli_pref_centro_direita +
+                     expec_poli_pref_centro +
+                     expec_poli_pref_centro_esquerda +
+                     expec_poli_pref_esquerda,
+                     data = model_data,
+                     family = binomial(link = "logit"))
+summary(logit_model)
+
+
+# Probit model
+probit_model <- glm(dummy_situacao ~ valor_proposta + 
+                      # populacao + 
+                      igm_cfa + 
+                      ifgf_firjan +
+                      ifdm_firjan +
+                      # pib + 
+                      # expec_poli_presi +
+                      pib_per_capita + 
+                      ano_eleitoral_presi +
+                      ano_eleitoral_mun + 
+                      expec_poli_pref_direita +
+                      expec_poli_pref_centro_direita +
+                      expec_poli_pref_centro +
+                      expec_poli_pref_centro_esquerda +
+                      expec_poli_pref_esquerda,
+                    data = model_data,
+                    family = binomial(link = "logit"))
+summary(probit_model)
+
+# Odds ratios for logit
+exp(coef(logit_model))
+
+# Pseudo R²
+logit_psr2 <- 1 - logLik(logit_model)/logLik(glm(dummy_situacao ~ 1, data = model_data, family = binomial))
+print(paste("Pseudo R-squared (logit):", round(logit_psr2, 3)))
+
+
+
+
+
+
